@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: git-mirror-backend
+    volumes:
+      - git-mirror-data:/data
+      - git-mirror-work:/tmp/git-mirror
+    environment:
+      - DATA_DIR=/data
+      - WORK_DIR=/tmp/git-mirror
+      - DATABASE_URL=sqlite:////data/git_mirror.db
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=*
+      - no_proxy=*
+    restart: unless-stopped
+    networks:
+      - git-mirror-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: git-mirror-frontend
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - git-mirror-network
+
+volumes:
+  git-mirror-data:
+    driver: local
+  git-mirror-work:
+    driver: local
+
+networks:
+  git-mirror-network:
+    driver: bridge
