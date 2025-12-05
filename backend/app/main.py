@@ -394,13 +394,33 @@ async def delete_repo_pair(pair_id: str, user: dict = require_edit()):
 
 
 @app.post("/api/repo-pairs/{pair_id}/sync")
-async def trigger_sync(pair_id: str, background_tasks: BackgroundTasks, user: dict = require_edit()):
+async def trigger_sync(pair_id: str, user: dict = require_edit()):
     pair = db.get_repo_pair(pair_id)
     if not pair:
         raise HTTPException(status_code=404, detail="Repository pair not found")
     
-    background_tasks.add_task(sync_service.sync_now, pair_id)
+    # sync_now now handles background execution internally
+    sync_service.sync_now(pair_id)
     return {"message": "Sync triggered", "pair_id": pair_id}
+
+
+@app.post("/api/repo-pairs/{pair_id}/abort")
+async def abort_sync(pair_id: str, user: dict = require_edit()):
+    """Abort a running sync for a repo pair"""
+    pair = db.get_repo_pair(pair_id)
+    if not pair:
+        raise HTTPException(status_code=404, detail="Repository pair not found")
+    
+    if sync_service.abort_sync(pair_id):
+        return {"message": "Abort requested", "pair_id": pair_id}
+    else:
+        raise HTTPException(status_code=400, detail="No sync in progress for this pair")
+
+
+@app.get("/api/sync-status")
+async def get_sync_status(user: dict = require_view()):
+    """Get list of currently syncing repo pair IDs"""
+    return {"syncing": sync_service.get_active_syncs()}
 
 
 @app.get("/api/repo-pairs/{pair_id}/logs")
@@ -408,6 +428,12 @@ async def get_sync_logs(pair_id: str, limit: int = 50, user: dict = require_view
     if not db.get_repo_pair(pair_id):
         raise HTTPException(status_code=404, detail="Repository pair not found")
     return db.get_sync_logs(pair_id, limit)
+
+
+@app.get("/api/recent-activity")
+async def get_recent_activity(limit: int = 10, user: dict = require_view()):
+    """Get recent sync activity across all repository pairs"""
+    return db.get_recent_activity(limit)
 
 
 # ==================== Global Configuration Endpoints ====================

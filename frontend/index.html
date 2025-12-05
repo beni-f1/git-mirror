@@ -451,6 +451,35 @@
             color: #64748b;
         }
         
+        .status-syncing {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+        
+        /* Spinning animation */
+        .spin {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Syncing row highlight */
+        .syncing-row {
+            background: linear-gradient(90deg, #eff6ff 0%, #ffffff 50%, #eff6ff 100%);
+            background-size: 200% 100%;
+            animation: syncingGradient 2s ease-in-out infinite;
+        }
+        
+        @keyframes syncingGradient {
+            0% { background-position: 100% 0; }
+            50% { background-position: 0 0; }
+            100% { background-position: 100% 0; }
+        }
+        
         /* Modals */
         .modal-content {
             background: #ffffff;
@@ -537,6 +566,18 @@
         }
         
         .action-btn.delete:hover {
+            background: #fee2e2;
+            color: #dc2626;
+            border-color: #fca5a5;
+        }
+        
+        .action-btn.abort {
+            background: #fef3c7;
+            color: #d97706;
+            border-color: #fcd34d;
+        }
+        
+        .action-btn.abort:hover {
             background: #fee2e2;
             color: #dc2626;
             border-color: #fca5a5;
@@ -719,7 +760,7 @@
                     <a class="nav-link" href="#" data-page="repos">
                         <i class="bi bi-arrow-left-right"></i>Repo Pairs
                     </a>
-                    <a class="nav-link" href="#" data-page="settings">
+                    <a class="nav-link admin-only" href="#" data-page="settings">
                         <i class="bi bi-gear-fill"></i>Settings
                     </a>
                     
@@ -862,21 +903,21 @@
                                         <div class="col-md-6 mb-4">
                                             <label class="form-label">Default Sync Interval</label>
                                             <div class="input-group">
-                                                <input type="number" class="form-control" id="config-interval" min="1" value="60">
+                                                <input type="number" class="form-control settings-input" id="config-interval" min="1" value="60">
                                                 <span class="input-group-text" style="background: #f8fafc; border-color: #e2e8f0; color: #64748b;">minutes</span>
                                             </div>
                                             <div class="form-text">How often new pairs will sync by default</div>
                                         </div>
                                         <div class="col-md-6 mb-4">
                                             <label class="form-label">Max Concurrent Syncs</label>
-                                            <input type="number" class="form-control" id="config-concurrent" min="1" max="10" value="3">
+                                            <input type="number" class="form-control settings-input" id="config-concurrent" min="1" max="10" value="3">
                                             <div class="form-text">Maximum parallel sync operations</div>
                                         </div>
                                     </div>
                                     <div class="row">
                                         <div class="col-md-6 mb-4">
                                             <div class="form-check form-switch">
-                                                <input class="form-check-input" type="checkbox" id="config-retry" checked>
+                                                <input class="form-check-input settings-input" type="checkbox" id="config-retry" checked>
                                                 <label class="form-check-label" for="config-retry">
                                                     Retry on Failure
                                                 </label>
@@ -885,12 +926,12 @@
                                         </div>
                                         <div class="col-md-6 mb-4">
                                             <label class="form-label">Retry Count</label>
-                                            <input type="number" class="form-control" id="config-retry-count" min="1" max="10" value="3">
+                                            <input type="number" class="form-control settings-input" id="config-retry-count" min="1" max="10" value="3">
                                             <div class="form-text">Number of retry attempts on failure</div>
                                         </div>
                                     </div>
                                     <hr class="my-4">
-                                    <button type="submit" class="btn btn-primary admin-only">
+                                    <button type="submit" class="btn btn-primary admin-only" id="settings-save-btn">
                                         <i class="bi bi-check-lg me-2"></i>Save Changes
                                     </button>
                                 </form>

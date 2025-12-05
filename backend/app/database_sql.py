@@ -57,6 +57,9 @@ class Database:
         # Create all tables
         Base.metadata.create_all(bind=self._engine)
         
+        # Run migrations for existing databases
+        self._run_migrations()
+        
         # Initialize default config if not exists
         with self.get_session() as session:
             config = session.query(GlobalConfig).first()
@@ -64,6 +67,37 @@ class Database:
                 config = GlobalConfig()
                 session.add(config)
                 session.commit()
+    
+    def _run_migrations(self):
+        """Run database migrations for schema updates"""
+        from sqlalchemy import text, inspect
+        
+        inspector = inspect(self._engine)
+        
+        # Check if sync_logs table exists and add new columns if needed
+        if 'sync_logs' in inspector.get_table_names():
+            columns = [col['name'] for col in inspector.get_columns('sync_logs')]
+            
+            with self._engine.connect() as conn:
+                # Add branches_synced column if missing
+                if 'branches_synced' not in columns:
+                    conn.execute(text("ALTER TABLE sync_logs ADD COLUMN branches_synced INTEGER DEFAULT 0"))
+                    conn.commit()
+                
+                # Add tags_synced column if missing
+                if 'tags_synced' not in columns:
+                    conn.execute(text("ALTER TABLE sync_logs ADD COLUMN tags_synced INTEGER DEFAULT 0"))
+                    conn.commit()
+                
+                # Add commits_synced column if missing
+                if 'commits_synced' not in columns:
+                    conn.execute(text("ALTER TABLE sync_logs ADD COLUMN commits_synced INTEGER DEFAULT 0"))
+                    conn.commit()
+                
+                # Add changes_detected column if missing
+                if 'changes_detected' not in columns:
+                    conn.execute(text("ALTER TABLE sync_logs ADD COLUMN changes_detected BOOLEAN DEFAULT 0"))
+                    conn.commit()
     
     @contextmanager
     def get_session(self) -> Session:
@@ -136,12 +170,21 @@ class Database:
     # Sync Logs
     def add_sync_log(self, pair_id: str, log_entry: Dict):
         with self.get_session() as session:
+            # Count branches if provided as list
+            branches_synced = log_entry.get("branches_synced", 0)
+            if isinstance(branches_synced, list):
+                branches_synced = len(branches_synced)
+            
             log = SyncLog(
                 repo_pair_id=pair_id,
                 status=log_entry.get("status", "unknown"),
                 message=log_entry.get("message"),
                 error=log_entry.get("error"),
                 duration_seconds=log_entry.get("duration_seconds"),
+                branches_synced=branches_synced,
+                tags_synced=log_entry.get("tags_synced", 0),
+                commits_synced=log_entry.get("commits_synced", 0),
+                changes_detected=log_entry.get("changes_detected", False),
             )
             session.add(log)
             session.commit()
@@ -162,6 +205,25 @@ class Database:
             ).order_by(SyncLog.timestamp.desc()).limit(limit).all()
             
             return [log.to_dict() for log in logs]
+    
+    def get_recent_activity(self, limit: int = 10) -> List[Dict]:
+        """Get recent sync logs across all repo pairs with repo pair names"""
+        with self.get_session() as session:
+            logs = session.query(SyncLog).order_by(
+                SyncLog.timestamp.desc()
+            ).limit(limit).all()
+            
+            result = []
+            for log in logs:
+                log_dict = log.to_dict()
+                # Add repo pair name
+                pair = session.query(RepoPair).filter(
+                    RepoPair.id == log.repo_pair_id
+                ).first()
+                log_dict['repo_pair_name'] = pair.name if pair else 'Unknown'
+                result.append(log_dict)
+            
+            return result
     
     # Global Configuration
     def get_global_config(self) -> Dict[str, Any]:

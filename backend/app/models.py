@@ -123,6 +123,12 @@ class SyncLog(Base):
     error = Column(Text, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     
+    # Sync statistics
+    branches_synced = Column(Integer, default=0)  # Number of branches synced
+    tags_synced = Column(Integer, default=0)      # Number of tags synced
+    commits_synced = Column(Integer, default=0)   # Number of new commits (if available)
+    changes_detected = Column(Boolean, default=False)  # Whether any changes were detected
+    
     timestamp = Column(DateTime, default=datetime.utcnow)
     
     # Relationship
@@ -136,6 +142,10 @@ class SyncLog(Base):
             "message": self.message,
             "error": self.error,
             "duration_seconds": self.duration_seconds,
+            "branches_synced": self.branches_synced or 0,
+            "tags_synced": self.tags_synced or 0,
+            "commits_synced": self.commits_synced or 0,
+            "changes_detected": self.changes_detected or False,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
         }
 

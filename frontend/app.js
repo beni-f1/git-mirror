@@ -8,6 +8,8 @@ let globalConfig = {};
 let currentUser = null;
 let authToken = null;
 let users = [];
+let syncingPairs = new Set(); // Track currently syncing pairs
+let syncStatusInterval = null; // Polling interval for sync status
 
 // ==================== Authentication ====================
 
@@ -90,6 +92,11 @@ function updateRoleBasedUI() {
     // Show/hide admin-only elements
     document.querySelectorAll('.admin-only').forEach(el => {
         el.classList.toggle('d-none', !isAdmin);
+    });
+    
+    // Disable settings inputs for non-admin users
+    document.querySelectorAll('.settings-input').forEach(el => {
+        el.disabled = !isAdmin;
     });
 }
 
@@ -180,7 +187,10 @@ function navigateTo(page, updateHash = true) {
     
     // Load data for page
     if (page === 'dashboard') loadDashboard();
-    if (page === 'repos') loadRepoPairs();
+    if (page === 'repos') {
+        loadRepoPairs();
+        checkSyncStatus(); // Check if anything is syncing
+    }
     if (page === 'settings') loadSettings();
     if (page === 'users') loadUsers();
 }
@@ -286,41 +296,64 @@ async function loadDashboard() {
 
 async function loadRecentActivity() {
     try {
-        const pairs = await apiCall('/repo-pairs');
+        const activities = await apiCall('/recent-activity?limit=10');
         const activityContainer = document.getElementById('recent-activity');
-        
-        if (pairs.length === 0) {
-            activityContainer.innerHTML = '<p class="text-muted">No repository pairs configured</p>';
-            return;
-        }
-        
-        // Get recent syncs from all pairs
-        const activities = pairs
-            .filter(p => p.last_sync)
-            .sort((a, b) => new Date(b.last_sync) - new Date(a.last_sync))
-            .slice(0, 5);
         
         if (activities.length === 0) {
             activityContainer.innerHTML = '<p class="text-muted">No recent sync activity</p>';
             return;
         }
         
-        activityContainer.innerHTML = activities.map(pair => `
-            <div class="log-entry">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <strong>${pair.name}</strong>
-                        <span class="status-badge ${getStatusClass(pair.last_sync_status)} ms-2">
-                            ${pair.last_sync_status || 'pending'}
-                        </span>
+        activityContainer.innerHTML = activities.map(log => {
+            // Build stats: branches and tags
+            let branchesHtml = '';
+            if (log.status === 'success' && log.branches_synced > 0) {
+                branchesHtml = `<span class="text-muted ms-2"><i class="bi bi-diagram-2"></i> ${log.branches_synced} branch${log.branches_synced !== 1 ? 'es' : ''}</span>`;
+            }
+            if (log.status === 'success' && log.tags_synced > 0) {
+                branchesHtml += `<span class="text-muted ms-2"><i class="bi bi-tag"></i> ${log.tags_synced} tag${log.tags_synced !== 1 ? 's' : ''}</span>`;
+            }
+            
+            // Build changes indicator
+            let changesHtml = '';
+            if (log.status === 'success') {
+                if (log.changes_detected) {
+                    changesHtml = `<span class="text-success ms-2"><i class="bi bi-cloud-upload"></i> Changes synced</span>`;
+                } else {
+                    changesHtml = `<span class="text-muted ms-2"><i class="bi bi-check-circle"></i> No changes</span>`;
+                }
+            }
+            
+            return `
+                <div class="log-entry" style="cursor: pointer;" onclick="showLogs('${log.repo_pair_id}')" title="Click to view all logs for ${log.repo_pair_name}">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${log.repo_pair_name}</strong>
+                            <span class="status-badge ${getStatusClass(log.status)} ms-2">${log.status}</span>
+                            ${branchesHtml}
+                            ${changesHtml}
+                            <span class="text-primary ms-2" style="font-size: 0.85em;"><i class="bi bi-box-arrow-up-right"></i></span>
+                        </div>
+                        <span class="log-time">${formatDate(log.timestamp)}</span>
                     </div>
-                    <span class="log-time">${formatDate(pair.last_sync)}</span>
+                    ${log.error ? `<div class="small text-danger mt-1"><i class="bi bi-exclamation-triangle me-1"></i>${truncateError(log.error)}</div>` : ''}
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     } catch (error) {
         console.error('Failed to load recent activity:', error);
     }
+}
+
+// Helper to truncate long error messages
+function truncateError(error, maxLength = 150) {
+    if (!error) return '';
+    // Get first line or truncate
+    const firstLine = error.split('\\n')[0].split('\n')[0];
+    if (firstLine.length > maxLength) {
+        return firstLine.substring(0, maxLength) + '...';
+    }
+    return firstLine;
 }
 
 // ==================== Repository Pairs ====================
@@ -349,39 +382,62 @@ function renderRepoPairs() {
         return;
     }
     
-    tbody.innerHTML = repoPairs.map(pair => `
-        <tr>
-            <td><strong>${pair.name}</strong></td>
-            <td><span class="repo-url" title="${pair.source_url}">${pair.source_url}</span></td>
-            <td><span class="repo-url" title="${pair.destination_url}">${pair.destination_url}</span></td>
-            <td>${pair.sync_interval_minutes} min</td>
-            <td>${pair.last_sync ? formatDate(pair.last_sync) : 'Never'}</td>
-            <td>
-                ${pair.enabled 
-                    ? `<span class="status-badge ${getStatusClass(pair.last_sync_status)}">${pair.last_sync_status || 'pending'}</span>`
-                    : '<span class="status-badge status-disabled">disabled</span>'
-                }
-            </td>
-            <td>
-                ${canEdit ? `
+    tbody.innerHTML = repoPairs.map(pair => {
+        const isSyncing = syncingPairs.has(pair.id);
+        
+        // Build status cell content
+        let statusHtml;
+        if (isSyncing) {
+            statusHtml = `<span class="status-badge status-syncing"><i class="bi bi-arrow-clockwise spin me-1"></i>syncing</span>`;
+        } else if (!pair.enabled) {
+            statusHtml = '<span class="status-badge status-disabled">disabled</span>';
+        } else {
+            statusHtml = `<span class="status-badge ${getStatusClass(pair.last_sync_status)}">${pair.last_sync_status || 'pending'}</span>`;
+        }
+        
+        // Build sync/abort button
+        let syncButtonHtml = '';
+        if (canEdit) {
+            if (isSyncing) {
+                syncButtonHtml = `
+                    <button class="action-btn abort me-1" onclick="abortSync('${pair.id}')" title="Stop Sync">
+                        <i class="bi bi-stop-circle"></i>
+                    </button>
+                `;
+            } else {
+                syncButtonHtml = `
                     <button class="action-btn sync me-1" onclick="triggerSync('${pair.id}')" title="Sync Now">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
-                ` : ''}
-                <button class="action-btn me-1" onclick="showLogs('${pair.id}')" title="View Logs">
-                    <i class="bi bi-list-ul"></i>
-                </button>
-                ${canEdit ? `
-                    <button class="action-btn me-1" onclick="editRepoPair('${pair.id}')" title="Edit">
-                        <i class="bi bi-pencil"></i>
+                `;
+            }
+        }
+        
+        return `
+            <tr class="${isSyncing ? 'syncing-row' : ''}">
+                <td><strong>${pair.name}</strong></td>
+                <td><span class="repo-url" title="${pair.source_url}">${pair.source_url}</span></td>
+                <td><span class="repo-url" title="${pair.destination_url}">${pair.destination_url}</span></td>
+                <td>${pair.sync_interval_minutes} min</td>
+                <td>${pair.last_sync ? formatDate(pair.last_sync) : 'Never'}</td>
+                <td>${statusHtml}</td>
+                <td>
+                    ${syncButtonHtml}
+                    <button class="action-btn me-1" onclick="showLogs('${pair.id}')" title="View Logs">
+                        <i class="bi bi-list-ul"></i>
                     </button>
-                    <button class="action-btn delete" onclick="deleteRepoPair('${pair.id}')" title="Delete">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                ` : ''}
-            </td>
-        </tr>
-    `).join('');
+                    ${canEdit ? `
+                        <button class="action-btn me-1" onclick="editRepoPair('${pair.id}')" title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="action-btn delete" onclick="deleteRepoPair('${pair.id}')" title="Delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    ` : ''}
+                </td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function getStatusClass(status) {
@@ -510,12 +566,91 @@ async function deleteRepoPair(id) {
 async function triggerSync(id) {
     try {
         await apiCall(`/repo-pairs/${id}/sync`, 'POST');
-        showToast('Sync triggered successfully');
+        showToast('Sync started');
         
-        // Refresh after a delay
-        setTimeout(loadRepoPairs, 2000);
+        // Immediately mark as syncing and update UI
+        syncingPairs.add(id);
+        renderRepoPairs();
+        
+        // Start polling for sync status
+        startSyncStatusPolling();
     } catch (error) {
         showToast('Failed to trigger sync: ' + error.message, 'danger');
+    }
+}
+
+async function abortSync(id) {
+    if (!confirm('Are you sure you want to stop this sync?')) return;
+    
+    try {
+        await apiCall(`/repo-pairs/${id}/abort`, 'POST');
+        showToast('Sync abort requested');
+    } catch (error) {
+        showToast('Failed to abort sync: ' + error.message, 'danger');
+    }
+}
+
+// ==================== Sync Status Polling ====================
+
+async function checkSyncStatus() {
+    try {
+        const status = await apiCall('/sync-status');
+        const newSyncingPairs = new Set(status.syncing || []);
+        
+        // Check if any sync finished
+        const finishedSyncing = [...syncingPairs].filter(id => !newSyncingPairs.has(id));
+        const startedSyncing = [...newSyncingPairs].filter(id => !syncingPairs.has(id));
+        
+        // Check if there's any change
+        const hasChanges = finishedSyncing.length > 0 || startedSyncing.length > 0;
+        
+        // Update the set BEFORE re-rendering
+        syncingPairs = newSyncingPairs;
+        
+        // Re-render and reload if there were changes
+        if (hasChanges) {
+            // If syncs finished, reload all data
+            if (finishedSyncing.length > 0) {
+                console.log('Sync finished for:', finishedSyncing);
+                // Wait a bit for backend to update, then reload everything
+                setTimeout(async () => {
+                    try {
+                        repoPairs = await apiCall('/repo-pairs');
+                        renderRepoPairs();
+                        loadRecentActivity();
+                    } catch (e) {
+                        console.error('Failed to reload after sync:', e);
+                    }
+                }, 500);
+            } else {
+                // Just re-render for started syncs
+                renderRepoPairs();
+            }
+        }
+        
+        // Stop polling if no more syncs AND no pending finishes
+        if (syncingPairs.size === 0 && finishedSyncing.length === 0) {
+            stopSyncStatusPolling();
+        }
+    } catch (error) {
+        console.error('Failed to check sync status:', error);
+    }
+}
+
+function startSyncStatusPolling() {
+    if (syncStatusInterval) return; // Already polling
+    
+    // Poll every 1.5 seconds for more responsive feedback
+    syncStatusInterval = setInterval(checkSyncStatus, 1500);
+    
+    // Also check immediately
+    checkSyncStatus();
+}
+
+function stopSyncStatusPolling() {
+    if (syncStatusInterval) {
+        clearInterval(syncStatusInterval);
+        syncStatusInterval = null;
     }
 }
 
@@ -536,18 +671,49 @@ async function showLogs(id) {
             return;
         }
         
-        container.innerHTML = logs.map(log => `
-            <div class="log-entry">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="status-badge ${getStatusClass(log.status)}">${log.status}</span>
-                    <span class="log-time">${formatDate(log.timestamp)}</span>
+        container.innerHTML = logs.map(log => {
+            // Build sync stats summary
+            let statsHtml = '';
+            if (log.status === 'success') {
+                const stats = [];
+                if (log.branches_synced > 0) stats.push(`${log.branches_synced} branch${log.branches_synced !== 1 ? 'es' : ''}`);
+                if (log.tags_synced > 0) stats.push(`${log.tags_synced} tag${log.tags_synced !== 1 ? 's' : ''}`);
+                if (log.commits_synced > 0) stats.push(`${log.commits_synced} commit${log.commits_synced !== 1 ? 's' : ''}`);
+                
+                if (stats.length > 0) {
+                    statsHtml = `<div class="mt-1"><i class="bi bi-arrow-repeat me-1"></i>${stats.join(', ')} synced</div>`;
+                } else if (!log.changes_detected) {
+                    statsHtml = `<div class="mt-1 text-muted"><i class="bi bi-check-circle me-1"></i>No changes detected</div>`;
+                }
+            }
+            
+            // Build error display
+            let errorHtml = '';
+            if (log.error) {
+                errorHtml = `<div class="text-danger mt-2" style="white-space: pre-wrap; font-family: monospace; font-size: 0.85em; background: #fff5f5; padding: 8px; border-radius: 4px; border-left: 3px solid #dc3545;"><i class="bi bi-exclamation-triangle me-1"></i>${log.error}</div>`;
+            }
+            
+            // Build message display
+            let messageHtml = '';
+            if (log.message) {
+                messageHtml = `<div class="text-muted">${log.message}</div>`;
+            }
+            
+            return `
+                <div class="log-entry">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="status-badge ${getStatusClass(log.status)}">${log.status}</span>
+                        <span class="log-time">${formatDate(log.timestamp)}</span>
+                    </div>
+                    <div class="small">
+                        ${messageHtml}
+                        ${errorHtml}
+                        ${statsHtml}
+                        ${log.duration_seconds ? `<div class="text-muted mt-1"><i class="bi bi-clock me-1"></i>Duration: ${log.duration_seconds.toFixed(1)}s</div>` : ''}
+                    </div>
                 </div>
-                <div class="small">
-                    ${log.message || log.error || 'No details'}
-                    ${log.duration_seconds ? `<br><span class="text-muted">Duration: ${log.duration_seconds.toFixed(1)}s</span>` : ''}
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     } catch (error) {
         container.innerHTML = `<p class="text-danger">Failed to load logs: ${error.message}</p>`;
     }

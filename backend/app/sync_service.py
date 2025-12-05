@@ -29,6 +29,7 @@ class GitSyncService:
             "retry_count": 3
         }
         self._active_syncs: Dict[str, bool] = {}
+        self._abort_requested: Dict[str, bool] = {}  # Track abort requests
     
     def start_scheduler(self):
         """Start the background scheduler"""
@@ -117,9 +118,34 @@ class GitSyncService:
         self._config.update(config)
         self._executor._max_workers = config.get("max_concurrent_syncs", 3)
     
+    def get_active_syncs(self) -> List[str]:
+        """Get list of pair IDs currently being synced"""
+        return [pair_id for pair_id, active in self._active_syncs.items() if active]
+    
+    def is_syncing(self, pair_id: str) -> bool:
+        """Check if a specific pair is currently syncing"""
+        return self._active_syncs.get(pair_id, False)
+    
+    def abort_sync(self, pair_id: str) -> bool:
+        """Request abort for a running sync"""
+        if self._active_syncs.get(pair_id):
+            self._abort_requested[pair_id] = True
+            logger.info(f"Abort requested for {pair_id}")
+            return True
+        return False
+    
+    def _is_abort_requested(self, pair_id: str) -> bool:
+        """Check if abort was requested for this pair"""
+        return self._abort_requested.get(pair_id, False)
+    
+    def _clear_abort(self, pair_id: str):
+        """Clear abort flag for this pair"""
+        self._abort_requested[pair_id] = False
+    
     def sync_now(self, pair_id: str):
-        """Trigger immediate sync for a pair"""
-        self._do_sync(pair_id)
+        """Trigger immediate sync for a pair (runs in background thread)"""
+        # Submit to thread pool to run in background
+        self._executor.submit(self._do_sync, pair_id)
     
     def _do_sync(self, pair_id: str):
         """Execute the actual git sync"""
@@ -130,6 +156,7 @@ class GitSyncService:
             return
         
         self._active_syncs[pair_id] = True
+        self._clear_abort(pair_id)  # Clear any previous abort request
         pair = db.get_repo_pair(pair_id)
         
         if not pair:
@@ -144,6 +171,10 @@ class GitSyncService:
         }
         
         try:
+            # Check for abort before starting
+            if self._is_abort_requested(pair_id):
+                raise Exception("Sync aborted by user")
+            
             logger.info(f"Starting sync for {pair_id}: {pair['name']}")
             
             result = self._perform_git_sync(
@@ -160,9 +191,10 @@ class GitSyncService:
             log_entry["message"] = result.get("message", "Sync completed successfully")
             log_entry["branches_synced"] = result.get("branches_synced", [])
             log_entry["tags_synced"] = result.get("tags_synced", 0)
+            log_entry["changes_detected"] = result.get("changes_detected", False)
             
             db.update_sync_status(pair_id, "success")
-            logger.info(f"Sync completed for {pair_id}")
+            logger.info(f"Sync completed for {pair_id}: {result.get('message')}")
             
         except Exception as e:
             error_msg = str(e)
@@ -193,6 +225,12 @@ class GitSyncService:
                         break
                     except Exception as retry_e:
                         logger.error(f"Retry {attempt + 1} failed for {pair_id}: {retry_e}")
+                        # Check for abort between retries
+                        if self._is_abort_requested(pair_id):
+                            log_entry["status"] = "error"
+                            log_entry["error"] = "Sync aborted by user"
+                            db.update_sync_status(pair_id, "error", "Sync aborted by user")
+                            break
         
         finally:
             end_time = datetime.utcnow()
@@ -201,6 +239,8 @@ class GitSyncService:
             
             db.add_sync_log(pair_id, log_entry)
             self._active_syncs[pair_id] = False
+            self._clear_abort(pair_id)  # Clear abort flag
+            logger.info(f"Sync finished for {pair_id}, active_syncs cleared")
     
     def _perform_git_sync(
         self,
@@ -279,12 +319,28 @@ class GitSyncService:
             except:
                 self._run_git(["remote", "set-url", "destination", auth_dest_url], cwd=repo_dir, env=ssh_env)
             
-            # Push to destination
-            push_args = ["push", "destination", "--mirror", "--force"]
+            # Push to destination and capture output to detect changes
+            push_args = ["push", "destination", "--mirror", "--force", "--porcelain"]
             if not sync_tags:
-                push_args = ["push", "destination", "--all", "--force"]
+                push_args = ["push", "destination", "--all", "--force", "--porcelain"]
             
-            self._run_git(push_args, cwd=repo_dir, env=ssh_env)
+            push_output = self._run_git(push_args, cwd=repo_dir, env=ssh_env)
+            
+            # Parse push output to detect changes
+            # Porcelain format: <flag> <from>:<to> <summary>
+            # Flag meanings: ' ' = up-to-date, '+' = forced update, '-' = deleted, '*' = new ref, '!' = rejected, '=' = up-to-date
+            changes_detected = False
+            for line in push_output.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('Done') and not line.startswith('To '):
+                    # Check if there are actual changes (not just '=' which means up-to-date)
+                    if line and len(line) > 0:
+                        flag = line[0] if line else ''
+                        if flag in ['+', '-', '*', ' '] and flag != '=':
+                            # '+' = forced, '-' = deleted, '*' = new, ' ' = fast-forward
+                            if flag != ' ' or ':' in line:  # ' ' with ':' means actual update
+                                changes_detected = True
+                                break
             
             # Count tags if synced
             tags_synced = 0
@@ -292,10 +348,17 @@ class GitSyncService:
                 tags_output = self._run_git(["tag", "-l"], cwd=repo_dir, env=ssh_env)
                 tags_synced = len([t for t in tags_output.split("\n") if t.strip()])
             
+            # Build appropriate message
+            if changes_detected:
+                message = f"Sync completed: {len(branches_to_sync)} branches, {tags_synced} tags"
+            else:
+                message = "Sync completed: No changes detected"
+            
             return {
-                "message": "Sync completed successfully",
+                "message": message,
                 "branches_synced": branches_to_sync,
-                "tags_synced": tags_synced
+                "tags_synced": tags_synced,
+                "changes_detected": changes_detected
             }
             
         finally:
