@@ -1,9 +1,65 @@
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, JSON, ForeignKey, create_engine
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, JSON, ForeignKey, create_engine, Enum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import enum
 
 Base = declarative_base()
+
+
+class UserRole(enum.Enum):
+    VIEW = "view"       # Can only view repos and logs
+    EDIT = "edit"       # Can view + add/edit/delete repo pairs, trigger syncs
+    ADMIN = "admin"     # Full access including user management and settings
+
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(String(36), primary_key=True)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=True)
+    full_name = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default=UserRole.VIEW.value)
+    is_active = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+    
+    def to_dict(self, include_sensitive=False):
+        data = {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "full_name": self.full_name,
+            "role": self.role,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "last_login": self.last_login.isoformat() if self.last_login else None,
+        }
+        return data
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+    
+    id = Column(String(64), primary_key=True)  # Session token
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    
+    user = relationship("User")
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
 
 
 class RepoPair(Base):

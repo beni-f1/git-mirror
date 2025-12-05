@@ -13,6 +13,11 @@ services:
       - DATA_DIR=/data
       - WORK_DIR=/tmp/git-mirror
       - DATABASE_URL=sqlite:////data/git_mirror.db
+      # Admin user configuration
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+      - FORCE_ADMIN_USER=true
+      # Proxy bypass
       - HTTP_PROXY=
       - HTTPS_PROXY=
       - http_proxy=

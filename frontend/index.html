@@ -18,6 +18,57 @@
             min-height: 100vh;
         }
         
+        /* Login Page */
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .login-container {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+        }
+        
+        .login-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        
+        .login-header i {
+            font-size: 3rem;
+            color: #6366f1;
+            margin-bottom: 16px;
+        }
+        
+        .login-header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+        }
+        
+        .login-header p {
+            color: #64748b;
+            margin-top: 8px;
+        }
+        
+        .login-error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.875rem;
+            display: none;
+        }
+        
         /* Sidebar */
         .sidebar {
             background: #ffffff;
@@ -29,6 +80,8 @@
             left: 0;
             top: 0;
             box-shadow: 2px 0 8px rgba(0,0,0,0.04);
+            display: flex;
+            flex-direction: column;
         }
         
         .sidebar-header {
@@ -52,6 +105,57 @@
         
         .sidebar-nav {
             padding: 16px 12px;
+            flex-grow: 1;
+        }
+        
+        .sidebar-footer {
+            padding: 16px;
+            border-top: 1px solid #e2e8f0;
+            background: #f8fafc;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 12px;
+        }
+        
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        
+        .user-details {
+            flex-grow: 1;
+            min-width: 0;
+        }
+        
+        .user-name {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.875rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .user-role {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: capitalize;
         }
         
         .nav-link {
@@ -82,6 +186,16 @@
             color: #ffffff;
             background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
             box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+        }
+        
+        .nav-section {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 16px 16px 8px;
+            margin-top: 8px;
         }
         
         /* Main Content */
@@ -562,7 +676,33 @@
     </style>
 </head>
 <body>
-    <div class="container-fluid p-0">
+    <!-- Login Page -->
+    <div id="login-page" class="login-page">
+        <div class="login-container">
+            <div class="login-header">
+                <i class="bi bi-git"></i>
+                <h1>Git Mirror</h1>
+                <p>Sign in to your account</p>
+            </div>
+            <div id="login-error" class="login-error"></div>
+            <form id="login-form">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" class="form-control" id="login-username" required autofocus>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-control" id="login-password" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 py-2">
+                    <i class="bi bi-box-arrow-in-right me-2"></i>Sign In
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main App Container (hidden until logged in) -->
+    <div id="app-container" class="container-fluid p-0 d-none">
         <div class="row g-0">
             <!-- Sidebar -->
             <div class="sidebar">
@@ -582,7 +722,28 @@
                     <a class="nav-link" href="#" data-page="settings">
                         <i class="bi bi-gear-fill"></i>Settings
                     </a>
+                    
+                    <!-- Admin Section (shown only for admins) -->
+                    <div id="admin-nav" class="d-none">
+                        <div class="nav-section">Administration</div>
+                        <a class="nav-link" href="#" data-page="users">
+                            <i class="bi bi-people-fill"></i>Users
+                        </a>
+                    </div>
                 </nav>
+                
+                <div class="sidebar-footer">
+                    <div class="user-info">
+                        <div class="user-avatar" id="user-avatar">A</div>
+                        <div class="user-details">
+                            <div class="user-name" id="user-display-name">Admin</div>
+                            <div class="user-role" id="user-role">admin</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-secondary w-100" onclick="logout()">
+                        <i class="bi bi-box-arrow-left me-2"></i>Sign Out
+                    </button>
+                </div>
             </div>
             
             <!-- Main Content -->
@@ -650,7 +811,7 @@
                                 <h1 class="page-title">Repository Pairs</h1>
                                 <p class="page-subtitle">Manage your source and destination repositories</p>
                             </div>
-                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRepoModal">
+                            <button class="btn btn-primary edit-only" data-bs-toggle="modal" data-bs-target="#addRepoModal">
                                 <i class="bi bi-plus-lg me-2"></i>Add Pair
                             </button>
                         </div>
@@ -729,10 +890,51 @@
                                         </div>
                                     </div>
                                     <hr class="my-4">
-                                    <button type="submit" class="btn btn-primary">
+                                    <button type="submit" class="btn btn-primary admin-only">
                                         <i class="bi bi-check-lg me-2"></i>Save Changes
                                     </button>
                                 </form>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Users Page (Admin Only) -->
+                    <div id="page-users" class="page d-none">
+                        <div class="page-header d-flex justify-content-between align-items-start">
+                            <div>
+                                <h1 class="page-title">User Management</h1>
+                                <p class="page-subtitle">Manage users and their permissions</p>
+                            </div>
+                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                                <i class="bi bi-person-plus me-2"></i>Add User
+                            </button>
+                        </div>
+                        
+                        <div class="card">
+                            <div class="card-body p-0">
+                                <table class="table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Username</th>
+                                            <th>Full Name</th>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Status</th>
+                                            <th>Last Login</th>
+                                            <th style="width: 120px;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="users-table-body">
+                                        <tr>
+                                            <td colspan="7">
+                                                <div class="empty-state">
+                                                    <i class="bi bi-people"></i>
+                                                    <p>Loading users...</p>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -896,6 +1098,108 @@
                             <p>Loading logs...</p>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Add/Edit User Modal -->
+    <div class="modal fade" id="addUserModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="userModalTitle">
+                        <i class="bi bi-person-plus me-2" style="color: #6366f1;"></i>Add User
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="user-form">
+                        <input type="hidden" id="user-id">
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-control" id="user-username" required 
+                                   minlength="3" maxlength="100" placeholder="Enter username">
+                            <div class="form-text">Must be at least 3 characters</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" id="user-password" 
+                                   minlength="4" placeholder="Enter password">
+                            <div class="form-text" id="password-help">Must be at least 4 characters</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" class="form-control" id="user-fullname" placeholder="Enter full name">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" id="user-email" placeholder="Enter email">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Role</label>
+                            <select class="form-select" id="user-role" required>
+                                <option value="view">View - Can only view repos and logs</option>
+                                <option value="edit">Edit - Can manage repo pairs and trigger syncs</option>
+                                <option value="admin">Admin - Full access including user management</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="user-active" checked>
+                            <label class="form-check-label" for="user-active">
+                                Active account
+                            </label>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="save-user-btn">
+                        <i class="bi bi-check-lg me-2"></i>Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Change Password Modal -->
+    <div class="modal fade" id="changePasswordModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-key me-2" style="color: #6366f1;"></i>Change Password
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="password-form">
+                        <div class="mb-3">
+                            <label class="form-label">Current Password</label>
+                            <input type="password" class="form-control" id="current-password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">New Password</label>
+                            <input type="password" class="form-control" id="new-password" required minlength="4">
+                            <div class="form-text">Must be at least 4 characters</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Confirm New Password</label>
+                            <input type="password" class="form-control" id="confirm-password" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="change-password-btn">
+                        <i class="bi bi-check-lg me-2"></i>Change Password
+                    </button>
                 </div>
             </div>
         </div>

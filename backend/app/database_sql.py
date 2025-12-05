@@ -1,12 +1,14 @@
 import os
+import secrets
+import hashlib
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-from .models import Base, RepoPair, SyncLog, GlobalConfig
+from .models import Base, RepoPair, SyncLog, GlobalConfig, User, Session as UserSession, UserRole
 
 
 class Database:
@@ -185,6 +187,184 @@ class Database:
                 if hasattr(config, key):
                     setattr(config, key, value)
             
+            session.commit()
+    
+    # User Management
+    @staticmethod
+    def _hash_password(password: str) -> str:
+        """Hash a password using SHA-256 with salt"""
+        salt = secrets.token_hex(16)
+        hash_obj = hashlib.sha256((salt + password).encode())
+        return f"{salt}${hash_obj.hexdigest()}"
+    
+    @staticmethod
+    def _verify_password(password: str, password_hash: str) -> bool:
+        """Verify a password against its hash"""
+        try:
+            salt, hash_value = password_hash.split("$")
+            hash_obj = hashlib.sha256((salt + password).encode())
+            return hash_obj.hexdigest() == hash_value
+        except (ValueError, AttributeError):
+            return False
+    
+    def create_default_admin(self):
+        """Create or update admin user from environment variables or defaults"""
+        admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+        admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
+        force_admin = os.environ.get("FORCE_ADMIN_USER", "").lower() in ("true", "1", "yes")
+        
+        with self.get_session() as session:
+            # Check if we should force recreate/update admin user
+            if force_admin:
+                existing_admin = session.query(User).filter(User.username == admin_username).first()
+                if existing_admin:
+                    # Update existing admin password
+                    existing_admin.password_hash = self._hash_password(admin_password)
+                    existing_admin.role = UserRole.ADMIN.value
+                    existing_admin.is_active = True
+                    session.commit()
+                    return "updated"
+                else:
+                    # Create new admin
+                    import uuid
+                    admin_user = User(
+                        id=str(uuid.uuid4()),
+                        username=admin_username,
+                        password_hash=self._hash_password(admin_password),
+                        email=f"{admin_username}@localhost",
+                        full_name="Administrator",
+                        role=UserRole.ADMIN.value,
+                        is_active=True
+                    )
+                    session.add(admin_user)
+                    session.commit()
+                    return "created"
+            
+            # Only create if no users exist
+            user_count = session.query(User).count()
+            if user_count == 0:
+                import uuid
+                admin_user = User(
+                    id=str(uuid.uuid4()),
+                    username=admin_username,
+                    password_hash=self._hash_password(admin_password),
+                    email=f"{admin_username}@localhost",
+                    full_name="Administrator",
+                    role=UserRole.ADMIN.value,
+                    is_active=True
+                )
+                session.add(admin_user)
+                session.commit()
+                return "created"
+        return None
+    
+    def get_all_users(self) -> List[Dict]:
+        with self.get_session() as session:
+            users = session.query(User).all()
+            return [user.to_dict() for user in users]
+    
+    def get_user(self, user_id: str) -> Optional[Dict]:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            return user.to_dict() if user else None
+    
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.username == username).first()
+            return user.to_dict() if user else None
+    
+    def create_user(self, user_id: str, username: str, password: str, email: str = None, 
+                    full_name: str = None, role: str = UserRole.VIEW.value) -> Dict:
+        with self.get_session() as session:
+            user = User(
+                id=user_id,
+                username=username,
+                password_hash=self._hash_password(password),
+                email=email,
+                full_name=full_name,
+                role=role,
+                is_active=True
+            )
+            session.add(user)
+            session.commit()
+            return user.to_dict()
+    
+    def update_user(self, user_id: str, user_data: Dict) -> Optional[Dict]:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return None
+            
+            for key, value in user_data.items():
+                if key == "password" and value:
+                    user.password_hash = self._hash_password(value)
+                elif key != "id" and key != "password_hash" and hasattr(user, key):
+                    setattr(user, key, value)
+            
+            session.commit()
+            return user.to_dict()
+    
+    def delete_user(self, user_id: str) -> bool:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if user:
+                # Delete user sessions first
+                session.query(UserSession).filter(UserSession.user_id == user_id).delete()
+                session.delete(user)
+                session.commit()
+                return True
+            return False
+    
+    def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
+        """Authenticate user and return user data if successful"""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.username == username).first()
+            if user and user.is_active and self._verify_password(password, user.password_hash):
+                user.last_login = datetime.utcnow()
+                session.commit()
+                return user.to_dict()
+            return None
+    
+    # Session Management
+    def create_session(self, user_id: str, expires_hours: int = 24) -> str:
+        """Create a new session for a user and return the session token"""
+        with self.get_session() as session:
+            token = secrets.token_hex(32)
+            user_session = UserSession(
+                id=token,
+                user_id=user_id,
+                expires_at=datetime.utcnow() + timedelta(hours=expires_hours)
+            )
+            session.add(user_session)
+            session.commit()
+            return token
+    
+    def get_session_user(self, token: str) -> Optional[Dict]:
+        """Get user data from session token if valid"""
+        with self.get_session() as session:
+            user_session = session.query(UserSession).filter(UserSession.id == token).first()
+            if user_session and user_session.expires_at > datetime.utcnow():
+                user = session.query(User).filter(User.id == user_session.user_id).first()
+                if user and user.is_active:
+                    return user.to_dict()
+            return None
+    
+    def delete_session(self, token: str) -> bool:
+        """Delete a session (logout)"""
+        with self.get_session() as session:
+            user_session = session.query(UserSession).filter(UserSession.id == token).first()
+            if user_session:
+                session.delete(user_session)
+                session.commit()
+                return True
+            return False
+    
+    def cleanup_expired_sessions(self):
+        """Remove expired sessions"""
+        with self.get_session() as session:
+            session.query(UserSession).filter(
+                UserSession.expires_at < datetime.utcnow()
+            ).delete()
             session.commit()
 
 
